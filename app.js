@@ -363,6 +363,93 @@ function updateOrderDisplay() {
   if (totalEl) totalEl.textContent = `€${currentOrder.total.toFixed(2)}`;
 }
 
+// ==================== GOOGLE SHEETS SYNC ====================
+
+// Sync order to Google Sheets
+function syncOrderToSheets(order) {
+  const webAppUrl = localStorage.getItem('googleSheetsUrl');
+  if (!webAppUrl) return; // No URL configured, skip sync
+
+  // Use no-cors mode to bypass CORS restrictions
+  fetch(webAppUrl, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(order)
+  })
+  .then(() => {
+    console.log('[SYNC] Order sent to Google Sheets:', order.orderNumber);
+  })
+  .catch(error => {
+    console.error('[SYNC] Error syncing order:', error);
+    // Silent fail - don't interrupt the order flow
+  });
+}
+
+// Configure Google Sheets Web App URL
+function configureGoogleSheets() {
+  const currentUrl = localStorage.getItem('googleSheetsUrl') || '';
+  const newUrl = prompt(
+    'Enter Google Sheets Web App URL:\n\n' +
+    'To get this URL:\n' +
+    '1. Create a new Google Sheet\n' +
+    '2. Go to Extensions > Apps Script\n' +
+    '3. Paste the sync script, deploy as Web App\n' +
+    '4. Copy the Web App URL here',
+    currentUrl
+  );
+
+  if (newUrl !== null) {
+    if (newUrl.trim() === '') {
+      localStorage.removeItem('googleSheetsUrl');
+      alert('Google Sheets sync disabled.');
+    } else {
+      localStorage.setItem('googleSheetsUrl', newUrl.trim());
+      alert('✅ Google Sheets sync configured!\n\nPaste this URL in the Apps Script Web App URL field.');
+    }
+  }
+}
+
+// Test Google Sheets connection
+async function testGoogleSheetsSync() {
+  const webAppUrl = localStorage.getItem('googleSheetsUrl');
+  if (!webAppUrl) {
+    alert('Please configure Google Sheets URL first.');
+    return;
+  }
+
+  const testOrder = {
+    orderNumber: 'TEST_' + Date.now(),
+    createdAt: Date.now(),
+    paymentMethod: 'card',
+    items: [{ name: 'Test Item', quantity: 1 }],
+    subtotal: 10.00,
+    vat: 1.35,
+    total: 11.35,
+    status: 'pending'
+  };
+
+  try {
+    const response = await fetch(webAppUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(testOrder)
+    });
+
+    if (response.ok) {
+      alert('✅ Test successful! Data synced to Google Sheets.');
+    } else {
+      alert('❌ Test failed. Check your Web App URL.');
+    }
+  } catch (error) {
+    alert('❌ Connection error: ' + error.message);
+  }
+}
+
+// ==================== END GOOGLE SHEETS SYNC ====================
+
 async function completeOrder(paymentMethod) {
   if (currentOrder.items.length === 0) return;
 
@@ -375,6 +462,9 @@ async function completeOrder(paymentMethod) {
       paymentMethod,
       promiseTime: promiseTimeMinutes // Store promise time
     });
+
+    // Sync to Google Sheets (async, don't wait)
+    syncOrderToSheets(order);
 
     // Reset promise time after order
     promiseTimeMinutes = 0;
@@ -495,6 +585,12 @@ async function showHistory() {
 function closeHistory() {
   document.getElementById('historyModal').classList.remove('show');
   if (activeModal === 'historyModal') activeModal = null;
+}
+
+// ==================== CONFIG SHEETS ====================
+function openConfigSheets() {
+  // Open config page in a new window/tab
+  window.open('/config-sheets.html', '_blank', 'width=800,height=600');
 }
 
 async function deleteHistoryOrder(orderId) {
@@ -686,16 +782,6 @@ function showReceipt(order) {
   // Scale receipt to fit
   setTimeout(scaleReceiptToFit, 50);
 
-  // Auto-save receipt to photo (if enabled in settings)
-  if (localStorage.getItem('autoSaveReceipt') === 'true') {
-    setTimeout(async () => {
-      try {
-        await shareReceipt();
-      } catch (e) {
-        console.log('Auto-save skipped');
-      }
-    }, 500);
-  }
 }
 
 function scaleReceiptToFit() {
@@ -940,21 +1026,7 @@ async function showProductEditor() {
     addBtn.title = products.length >= MAX_PRODUCTS ? 'Maximum products reached (15)' : 'Add a new product';
   }
 
-  // Update auto-save checkbox
-  const autoSaveCB = document.getElementById('autoSaveReceiptCB');
-  if (autoSaveCB) {
-    autoSaveCB.checked = localStorage.getItem('autoSaveReceipt') === 'true';
-  }
-
   openModal('productEditorModal');
-}
-
-// Toggle auto-save receipt setting
-function toggleAutoSaveReceipt() {
-  const cb = document.getElementById('autoSaveReceiptCB');
-  const enabled = cb.checked;
-  localStorage.setItem('autoSaveReceipt', enabled ? 'true' : 'false');
-  alert(enabled ? '✅ Auto-save enabled!\nReceipt will be saved after each order.' : '❌ Auto-save disabled.');
 }
 
 function closeProductEditor() {
@@ -1395,6 +1467,8 @@ window.removeFromOrder = removeFromOrder;
 window.clearOrder = clearOrder;
 window.completeOrder = completeOrder;
 window.setPromiseTime = setPromiseTime;
+window.configureGoogleSheets = configureGoogleSheets;
+window.testGoogleSheetsSync = testGoogleSheetsSync;
 window.showHistory = showHistory;
 window.showReceiptFromHistory = showReceiptFromHistory;
 window.shareHistoryReceipt = shareHistoryReceipt;

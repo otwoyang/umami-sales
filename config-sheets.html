@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Umami POS - Google Sheets Config</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 40px;
+      max-width: 500px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    h1 { color: #333; margin-bottom: 10px; font-size: 24px; }
+    .subtitle { color: #666; margin-bottom: 30px; font-size: 14px; }
+    label { display: block; color: #333; font-weight: 500; margin-bottom: 8px; }
+    input {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      margin-bottom: 20px;
+      transition: border-color 0.3s;
+    }
+    input:focus { outline: none; border-color: #667eea; }
+    button {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    button:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(102,126,234,0.4); }
+    .status {
+      margin-top: 20px;
+      padding: 12px;
+      border-radius: 8px;
+      text-align: center;
+      display: none;
+    }
+    .status.success { background: #d4edda; color: #155724; display: block; }
+    .status.error { background: #f8d7da; color: #721c24; display: block; }
+    .instructions {
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: #666;
+      line-height: 1.6;
+    }
+    .instructions h3 { color: #333; margin-bottom: 10px; }
+    .instructions ol { margin-left: 20px; }
+    .back-link {
+      display: block;
+      text-align: center;
+      margin-top: 20px;
+      color: #667eea;
+      text-decoration: none;
+      font-size: 14px;
+    }
+    .back-link:hover { text-decoration: underline; }
+    .current-url {
+      background: #e9ecef;
+      padding: 10px;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      word-break: break-all;
+      margin-bottom: 20px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📊 Google Sheets 配置</h1>
+    <p class="subtitle">Umami Sales 云同步设置</p>
+    
+    <div class="instructions">
+      <h3>设置步骤：</h3>
+      <ol>
+        <li>确保已在 Google Apps Script 部署了 Web App</li>
+        <li>复制 Web App 的 URL</li>
+        <li>粘贴到下方输入框并保存</li>
+      </ol>
+    </div>
+
+    <div class="current-url" id="currentUrl">当前配置：无</div>
+
+    <label for="sheetsUrl">Google Apps Script Web App URL：</label>
+    <input type="url" id="sheetsUrl" placeholder="https://script.google.com/macros/s/.../exec">
+    
+    <button onclick="saveConfig()">保存配置</button>
+    
+    <div style="margin-top: 15px;">
+      <button onclick="testSync()" style="background: #28a745;">🧪 测试同步</button>
+    </div>
+    
+    <div class="status" id="status"></div>
+    
+    <a href="/split.html" class="back-link">← 返回 POS 主页面</a>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const urlInput = document.getElementById('sheetsUrl');
+    const currentUrlEl = document.getElementById('currentUrl');
+
+    // Load current config
+    const currentUrl = localStorage.getItem('googleSheetsUrl');
+    if (currentUrl) {
+      urlInput.value = currentUrl;
+      currentUrlEl.textContent = '当前配置：' + currentUrl;
+    } else {
+      currentUrlEl.textContent = '当前配置：无';
+    }
+
+    function saveConfig() {
+      const url = urlInput.value.trim();
+      
+      if (!url) {
+        localStorage.removeItem('googleSheetsUrl');
+        statusEl.textContent = '✅ 配置已清除！';
+        statusEl.className = 'status success';
+        currentUrlEl.textContent = '当前配置：无';
+        return;
+      }
+
+      if (!url.startsWith('https://script.google.com')) {
+        statusEl.textContent = '❌ URL 必须是 script.google.com 格式';
+        statusEl.className = 'status error';
+        return;
+      }
+
+      localStorage.setItem('googleSheetsUrl', url);
+      statusEl.textContent = '✅ 配置已保存！';
+      statusEl.className = 'status success';
+      currentUrlEl.textContent = '当前配置：' + url;
+    }
+
+    // Test sync function - 使用 JSONP 方式绕过 CORS
+    function testSync() {
+      const url = localStorage.getItem('googleSheetsUrl');
+      if (!url) {
+        alert('请先配置 Google Sheets URL');
+        return;
+      }
+
+      const testData = {
+        orderNumber: 'TEST_' + Date.now(),
+        createdAt: Date.now(),
+        paymentMethod: 'card',
+        items: [{ name: 'Test Sushi', quantity: 1 }],
+        subtotal: 11.50,
+        vat: 1.35,
+        total: 12.85,
+        status: 'pending'
+      };
+
+      statusEl.textContent = '正在测试...';
+      statusEl.className = 'status';
+
+      // 使用 no-cors 模式
+      fetch(url, {
+        method: 'POST',
+        mode: 'no-cors', // 关键：忽略 CORS 错误
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(testData)
+      })
+      .then(() => {
+        statusEl.textContent = '✅ 测试请求已发送！\n请检查 Google Sheet 是否有新行（可能需要几秒）';
+        statusEl.className = 'status success';
+      })
+      .catch(error => {
+        statusEl.textContent = '❌ 连接错误：' + error.message;
+        statusEl.className = 'status error';
+      });
+    }
+  </script>
+</body>
+</html>

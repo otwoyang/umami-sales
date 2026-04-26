@@ -1425,6 +1425,15 @@ body {
   color: #fff;
 }
 
+.product-editor-footer .sync-btn {
+  background: #4285f4;
+  color: #fff;
+}
+
+.product-editor-footer .sync-btn:hover {
+  background: #3367d6;
+}
+
 .product-editor-footer .add-product-btn:hover,
 .product-editor-footer .reset-products-btn:hover,
 .product-editor-footer .clean-duplicates-btn:hover {

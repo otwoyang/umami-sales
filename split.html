@@ -50,6 +50,7 @@
     <div class="split-header">
       <button class="split-header-btn" onclick="openHistoryFromSplit()">📜 History</button>
       <button class="split-header-btn" onclick="openProductsFromSplit()">📦 Products</button>
+      <button class="split-header-btn" onclick="openSheetsConfigFromSplit()" style="background:#4285f4;">📊 Sheets</button>
     </div>
     <div class="split-view-content" id="splitViewContent">
       <div class="split-pane split-pane-left" id="splitPaneLeft">
@@ -63,10 +64,10 @@
   </div>
 
   <!-- Scripts (with cache busting) -->
-  <script src="/html2canvas.min.js?v=20260426a"></script>
-  <script src="/xlsx.full.min.js?v=20260426a"></script>
-  <script src="/db.js?v=20260426a"></script>
-  <script src="/app.js?v=20260426a"></script>
+  <script src="/html2canvas.min.js?v=20260426b"></script>
+  <script src="/xlsx.full.min.js?v=20260426b"></script>
+  <script src="/db.js?v=20260426b"></script>
+  <script src="/app.js?v=20260426b"></script>
   <script>
     // Wait for app.js to load, then setup draggable divider
     function waitForApp() {
@@ -98,6 +99,14 @@
       const orderFrame = document.getElementById('orderFrame');
       if (orderFrame && orderFrame.contentWindow) {
         orderFrame.contentWindow.postMessage({ action: 'showProducts' }, '*');
+      }
+    }
+
+    // Open Google Sheets config in the iframe
+    function openSheetsConfigFromSplit() {
+      const orderFrame = document.getElementById('orderFrame');
+      if (orderFrame && orderFrame.contentWindow) {
+        orderFrame.contentWindow.postMessage({ action: 'configureSheets' }, '*');
       }
     }
 
