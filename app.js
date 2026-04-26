@@ -377,19 +377,12 @@ function updateOrderDisplay() {
 }
 
 async function completeOrder(paymentMethod) {
-  alert('completeOrder called with: ' + paymentMethod);
-  console.log('[DEBUG] completeOrder called with:', paymentMethod);
-  console.log('[DEBUG] currentOrder:', currentOrder);
-  
   if (currentOrder.items.length === 0) {
     alert('No items in order!');
-    console.log('[DEBUG] No items in order');
     return;
   }
-  alert('Starting order process...');
 
   try {
-    console.log('[DEBUG] Step 1: Calling DB.addOrder...');
     const order = await DB.addOrder({
       items: [...currentOrder.items],
       subtotal: currentOrder.subtotal,
@@ -398,8 +391,6 @@ async function completeOrder(paymentMethod) {
       paymentMethod,
       promiseTime: promiseTimeMinutes
     });
-    console.log('[DEBUG] Step 1: DB.addOrder completed, order:', order);
-
     // Reset promise time after order
     promiseTimeMinutes = 0;
     const promiseBtn = document.getElementById('promiseBtn');
@@ -407,28 +398,16 @@ async function completeOrder(paymentMethod) {
       promiseBtn.classList.remove('active');
       promiseBtn.textContent = '⏳';
     }
-    console.log('[DEBUG] Step 2: Promise time reset');
 
     // Show receipt
-    console.log('[DEBUG] Step 3: Calling showReceipt...');
     showReceipt(order);
-    console.log('[DEBUG] Step 3: showReceipt called');
 
     // Clear current order
-    console.log('[DEBUG] Step 4: Calling clearOrder...');
     clearOrder();
-    console.log('[DEBUG] Step 4: clearOrder called');
 
     // Update sales display and ETA
-    console.log('[DEBUG] Step 5: Calling updateTodaySales...');
     await updateTodaySales();
-    console.log('[DEBUG] Step 5: updateTodaySales completed');
-    
-    console.log('[DEBUG] Step 6: Calling updateETA...');
     await updateETA();
-    console.log('[DEBUG] Step 6: updateETA completed');
-    
-    console.log('[DEBUG] completeOrder finished successfully!');
 
   } catch (error) {
     console.error('[ERROR] Failed to complete order:', error);
