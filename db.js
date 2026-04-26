@@ -434,12 +434,16 @@ async function getAllOrders() {
 async function addOrder(orderData) {
   const orderId = generateUUID();
   const now = new Date();
+  // Format: YYYYMMDDHHMMSS + random suffix (2 digits) to ensure uniqueness
+  const randomSuffix = Math.floor(Math.random() * 100).toString().padStart(2, '0');
   const orderNumber = [
     now.getFullYear(),
     String(now.getMonth() + 1).padStart(2, '0'),
     String(now.getDate()).padStart(2, '0'),
     String(now.getHours()).padStart(2, '0'),
-    String(now.getMinutes()).padStart(2, '0')
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0'),
+    randomSuffix
   ].join('');
 
   // Create local order first
