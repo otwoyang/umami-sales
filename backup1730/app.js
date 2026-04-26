@@ -685,6 +685,17 @@ function showReceipt(order) {
 
   // Scale receipt to fit
   setTimeout(scaleReceiptToFit, 50);
+
+  // Auto-save receipt to photo (if enabled in settings)
+  if (localStorage.getItem('autoSaveReceipt') === 'true') {
+    setTimeout(async () => {
+      try {
+        await shareReceipt();
+      } catch (e) {
+        console.log('Auto-save skipped');
+      }
+    }, 500);
+  }
 }
 
 function scaleReceiptToFit() {
@@ -929,7 +940,21 @@ async function showProductEditor() {
     addBtn.title = products.length >= MAX_PRODUCTS ? 'Maximum products reached (15)' : 'Add a new product';
   }
 
+  // Update auto-save checkbox
+  const autoSaveCB = document.getElementById('autoSaveReceiptCB');
+  if (autoSaveCB) {
+    autoSaveCB.checked = localStorage.getItem('autoSaveReceipt') === 'true';
+  }
+
   openModal('productEditorModal');
+}
+
+// Toggle auto-save receipt setting
+function toggleAutoSaveReceipt() {
+  const cb = document.getElementById('autoSaveReceiptCB');
+  const enabled = cb.checked;
+  localStorage.setItem('autoSaveReceipt', enabled ? 'true' : 'false');
+  alert(enabled ? '✅ Auto-save enabled!\nReceipt will be saved after each order.' : '❌ Auto-save disabled.');
 }
 
 function closeProductEditor() {
