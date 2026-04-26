@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#1a1a2e">
+  <title>Umami POS</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Service Worker Registration for PWA -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((registration) => {
+            console.log('SW registered:', registration.scope);
+          })
+          .catch((error) => {
+            console.log('SW registration failed:', error);
+          });
+      });
+    }
+  </script>
+</head>
+<body data-page="split">
+  <!-- Inline error handler -->
+  <script>
+    window.onerror = function(msg, url, line, col, error) {
+      var errorEl = document.getElementById('errorDisplay');
+      if (errorEl) {
+        errorEl.textContent = 'Error: ' + (error?.message || msg);
+        errorEl.style.display = 'block';
+      }
+      return true;
+    };
+  </script>
+
+  <!-- Error Display -->
+  <div id="errorDisplay" style="display:none; position:fixed; top:0; left:0; right:0; background:#ff4444; color:white; padding:10px; text-align:center; z-index:9999; font-size:14px;"></div>
+
+  <!-- Offline Banner -->
+  <div id="offlineBanner" class="offline-banner">📡 Offline Mode - Data will sync when connected</div>
+
+  <!-- Split View Container (always visible on this page) -->
+  <div id="splitViewContainer" class="split-view-container">
+    <!-- Split View Header -->
+    <div class="split-header">
+      <button class="split-header-btn" onclick="openHistoryFromSplit()">📜 History</button>
+      <button class="split-header-btn" onclick="openProductsFromSplit()">📦 Products</button>
+    </div>
+    <div class="split-view-content" id="splitViewContent">
+      <div class="split-pane split-pane-left" id="splitPaneLeft">
+        <iframe src="/kitchen.html" id="kitchenFrame" class="split-iframe"></iframe>
+      </div>
+      <div class="split-divider" id="splitDivider"></div>
+      <div class="split-pane split-pane-right" id="splitPaneRight">
+        <iframe src="/index.html?split=true" id="orderFrame" class="split-iframe"></iframe>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts (with cache busting) -->
+  <script src="/html2canvas.min.js?v=20260426a"></script>
+  <script src="/xlsx.full.min.js?v=20260426a"></script>
+  <script src="/db.js?v=20260426a"></script>
+  <script src="/app.js?v=20260426a"></script>
+  <script>
+    // Wait for app.js to load, then setup draggable divider
+    function waitForApp() {
+      if (typeof setupDraggableDivider === 'function') {
+        initSplitView();
+      } else {
+        setTimeout(waitForApp, 50);
+      }
+    }
+
+    function initSplitView() {
+      setupDraggableDivider();
+    }
+
+    function exitSplitView() {
+      window.location.href = '/index.html';
+    }
+
+    // Open History modal in the iframe
+    function openHistoryFromSplit() {
+      const orderFrame = document.getElementById('orderFrame');
+      if (orderFrame && orderFrame.contentWindow) {
+        orderFrame.contentWindow.postMessage({ action: 'showHistory' }, '*');
+      }
+    }
+
+    // Open Products modal in the iframe
+    function openProductsFromSplit() {
+      const orderFrame = document.getElementById('orderFrame');
+      if (orderFrame && orderFrame.contentWindow) {
+        orderFrame.contentWindow.postMessage({ action: 'showProducts' }, '*');
+      }
+    }
+
+    window.exitSplitView = exitSplitView;
+
+    // Start waiting for app.js
+    waitForApp();
+  </script>
+</body>
+</html>

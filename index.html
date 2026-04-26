@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#1a1a2e">
+  <title>Umami POS - Order</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Service Worker Registration for PWA -->
+  <script>
+    // Register Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((registration) => {
+            console.log('SW registered successfully, scope:', registration.scope);
+
+            // Wait for SW to be ready, then trigger pre-caching
+            if (registration.active) {
+              preCacheAll(registration);
+            } else {
+              registration.addEventListener('activate', () => preCacheAll(registration));
+            }
+
+            // Check for updates
+            registration.addEventListener('updatefound', () => {
+              console.log('New SW version found!');
+              const newWorker = registration.installing;
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  console.log('New content available, refresh to update');
+                  showUpdateNotification();
+                }
+              });
+            });
+          })
+          .catch((error) => {
+            console.error('SW registration failed:', error);
+          });
+      });
+
+      // Handle controller change (when SW updates)
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        console.log('SW controller changed, reloading...');
+        window.location.reload();
+      });
+    }
+
+    // Pre-cache all assets
+    function preCacheAll(registration) {
+      console.log('Pre-caching all assets...');
+      // Give a moment for SW to fully activate
+      setTimeout(() => {
+        if (registration.active) {
+          // Trigger pre-cache via message
+          const channel = new MessageChannel();
+          channel.port1.onmessage = (e) => {
+            console.log('Pre-cache result:', e.data);
+          };
+          registration.active.postMessage('preCacheAll', [channel.port2]);
+        }
+      }, 1000);
+    }
+
+    // Show update notification
+    function showUpdateNotification() {
+      const notif = document.createElement('div');
+      notif.id = 'swUpdateNotif';
+      notif.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#4CAF50;color:white;padding:15px 25px;border-radius:8px;z-index:99999;font-size:14px;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+      notif.innerHTML = '🔄 New version available!<br><button onclick="location.reload()" style="margin-top:10px;padding:8px 16px;background:#fff;color:#4CAF50;border:none;border-radius:4px;cursor:pointer;">Update Now</button>';
+      document.body.appendChild(notif);
+    }
+  </script>
+</head>
+<body data-page="order">
+  <!-- Auto-redirect to split view if accessed directly (not in iframe) -->
+  <script>
+    if (window === window.top && !window.location.search.includes('split=true')) {
+      window.location.href = '/split.html';
+    }
+  </script>
+
+  <!-- Inline error handler - catches errors before app.js loads -->
+  <script>
+    window.onerror = function(msg, url, line, col, error) {
+      var errorEl = document.getElementById('errorDisplay');
+      if (errorEl) {
+        errorEl.textContent = 'Error: ' + (error?.message || msg);
+        errorEl.style.display = 'block';
+      } else {
+        document.body.innerHTML = '<div style="padding:20px;background:#ff4444;color:white;text-align:center;">Error: ' + (error?.message || msg) + '</div>' + document.body.innerHTML;
+      }
+      return true;
+    };
+  </script>
+
+  <!-- Error Display (hidden by default) -->
+  <div id="errorDisplay" class="error-display" style="display:none; position:fixed; top:0; left:0; right:0; background:#ff4444; color:white; padding:10px; text-align:center; z-index:9999; font-size:14px;"></div>
+
+  <!-- Offline Banner -->
+  <div id="offlineBanner" class="offline-banner">📡 Offline Mode - Data will sync when connected</div>
+
+  <!-- Install Prompt -->
+  <div id="installPrompt" class="install-prompt">
+    <span>📱 Install App</span>
+    <button id="installBtn">Install</button>
+    <button id="dismissInstall">✕</button>
+  </div>
+
+  <!-- Reset Products Button (hidden, for debugging duplicate products) -->
+  <button id="resetProductsBtn" onclick="if(confirm('Reset all products? This will remove duplicates.')) window.forceResetProducts()" 
+          style="position:fixed;bottom:10px;right:10px;z-index:9999;padding:8px 12px;background:#666;color:white;border:none;border-radius:4px;font-size:12px;display:none;">
+    🔄 Reset Products
+  </button>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="header">
+      <h1 class="header-title">🍣 Umami POS</h1>
+      <nav class="header-nav">
+        <button class="nav-btn" onclick="showProductEditor()">📦 Products</button>
+        <button class="nav-btn" onclick="showHistory()">📜 History</button>
+      </nav>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content" id="mainContent">
+      <div class="order-panel" id="orderPanel">
+        <!-- Current Order (Left) -->
+        <section class="current-order">
+          <div class="order-header">
+            <div class="order-title-wrapper">
+              <span class="eta-badge" id="etaValue">15</span>
+              <h2 class="order-title">Current Order</h2>
+            </div>
+            <button class="clear-btn" onclick="clearOrder()">🗑️ Clear All</button>
+          </div>
+
+          <div id="orderItems" class="order-items">
+            <!-- Order items will be rendered here -->
+          </div>
+
+          <div id="emptyOrder" class="order-empty">
+            <div class="order-empty-icon">🛒</div>
+            <div>Click products to add items</div>
+          </div>
+
+          <div class="order-summary">
+            <div class="summary-row">
+              <span>Subtotal:</span>
+              <span id="subtotal">€0.00</span>
+            </div>
+            <div class="summary-row">
+              <span>VAT (13.5%):</span>
+              <span id="vat">€0.00</span>
+            </div>
+            <div class="summary-row total">
+              <span>Total:</span>
+              <span id="total">€0.00</span>
+            </div>
+
+            <div class="payment-buttons">
+              <button class="pay-btn card" onclick="completeOrder('card')" disabled>
+                💳 Card
+              </button>
+              <button class="pay-btn cash" onclick="completeOrder('cash')" disabled>
+                💵 Cash
+              </button>
+              <button class="pay-btn promise" id="promiseBtn" onclick="setPromiseTime()" title="Set promise time">
+                ⏳
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Products (Right) -->
+        <section class="products-panel">
+          <div class="products-header">
+            <h2 class="products-title">Products</h2>
+          </div>
+
+          <div id="productsGrid" class="products-grid">
+            <!-- Products will be rendered here -->
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- Split View Container (hidden by default) -->
+    <div id="splitViewContainer" class="split-view-container hidden">
+      <button class="split-close-btn" onclick="toggleSplitView()">✕ Close Split</button>
+      <div class="split-view-content" id="splitViewContent">
+        <div class="split-pane split-pane-left" id="splitPaneLeft">
+          <iframe src="/kitchen.html" id="kitchenFrame" class="split-iframe"></iframe>
+        </div>
+        <div class="split-divider" id="splitDivider"></div>
+        <div class="split-pane split-pane-right" id="splitPaneRight">
+          <iframe src="/index.html?split=true" id="orderFrame" class="split-iframe"></iframe>
+        </div>
+      </div>
+    </div>
+
+    <!-- Today Sales Display -->
+    <div id="todaySalesBox" class="today-sales">
+      <div class="today-sales-label">Today's Sales</div>
+      <div id="todaySalesAmount" class="today-sales-amount">€0.00</div>
+      <div class="td-orbit">
+        <span class="td-orbit-item">🍃</span>
+        <span class="td-orbit-item">🍃</span>
+        <span class="td-orbit-item">🍃</span>
+        <span class="td-orbit-item">🍃</span>
+        <span class="td-orbit-item">🍃</span>
+        <span class="td-orbit-item">🍃</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- History Modal -->
+  <div id="historyModal" class="modal-overlay" onclick="closeAllModals()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2 class="modal-title">📜 Today's Orders</h2>
+        <button class="modal-close" onclick="closeHistory()">✕</button>
+      </div>
+      <div id="historyList" class="modal-body">
+        <!-- History items will be rendered here -->
+      </div>
+      <div class="modal-footer">
+        <button class="export-btn" onclick="exportTodayOrders()">
+          📥 Export Excel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Receipt Modal -->
+  <div id="receiptModal" class="modal-overlay receipt-modal" onclick="closeAllModals()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2 class="modal-title">🧾 Receipt</h2>
+        <button class="modal-close" onclick="closeReceipt()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="receipt-content-wrapper">
+          <div id="receiptContent" class="receipt-content">
+            <!-- Receipt will be rendered here -->
+          </div>
+        </div>
+        <div class="receipt-actions receipt-actions-horizontal">
+          <button class="receipt-btn share-btn" id="shareReceiptBtn" onclick="shareReceipt()">
+            ✉️ Share / Email
+          </button>
+          <button class="receipt-btn print" onclick="printReceipt()">
+            🖨️ Print
+          </button>
+          <button class="receipt-btn download-btn" onclick="downloadReceiptImage()">
+            📥 Download Image
+          </button>
+          <button class="receipt-btn new-order" id="newOrderBtn" onclick="newOrder()">
+            ➕ New Order
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Product Editor Modal -->
+  <div id="productEditorModal" class="modal-overlay product-editor" onclick="closeAllModals()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2 class="modal-title">📦 Product Editor</h2>
+        <button class="modal-close" onclick="closeProductEditor()">✕</button>
+      </div>
+      <div id="productEditList" class="modal-body product-editor-body">
+        <!-- Products will be rendered here -->
+      </div>
+      <div class="modal-footer product-editor-footer">
+        <button id="cleanDuplicatesBtn" class="clean-duplicates-btn" onclick="cleanDuplicateProducts()">
+          🧹 Clean Duplicates
+        </button>
+        <span class="product-count">0 / 15 products</span>
+        <button id="addNewProductBtn" class="add-product-btn" onclick="addNewProduct()">
+          ➕ Add
+        </button>
+        <button class="reset-products-btn" onclick="resetAllProducts()">
+          🔄 Reset All
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/html2canvas.min.js?v=20260426a"></script>
+  <script src="/xlsx.full.min.js?v=20260426a"></script>
+  <script src="/db.js?v=20260426a"></script>
+  <script src="/app.js?v=20260426a"></script>
+
+  <!-- Listen for messages from split view parent -->
+  <script>
+    window.addEventListener('message', function(event) {
+      if (event.data && event.data.action) {
+        switch(event.data.action) {
+          case 'showHistory':
+            if (typeof showHistory === 'function') showHistory();
+            break;
+          case 'showProducts':
+            if (typeof showProductEditor === 'function') showProductEditor();
+            break;
+        }
+      }
+    });
+  </script>
+</body>
+</html>

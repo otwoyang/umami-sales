@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#1a1a2e">
+  <title>Umami POS - Kitchen</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Service Worker Registration for PWA -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((registration) => {
+            console.log('SW registered:', registration.scope);
+          })
+          .catch((error) => {
+            console.log('SW registration failed:', error);
+          });
+      });
+    }
+  </script>
+</head>
+<body data-page="kitchen">
+  <!-- Auto-redirect to split view if accessed directly (not in iframe) -->
+  <script>
+    if (window === window.top) {
+      window.location.href = '/split.html';
+    }
+  </script>
+
+  <!-- Inline error handler - catches errors before app.js loads -->
+  <script>
+    window.onerror = function(msg, url, line, col, error) {
+      var errorEl = document.getElementById('errorDisplay');
+      if (errorEl) {
+        errorEl.textContent = 'Error: ' + (error?.message || msg);
+        errorEl.style.display = 'block';
+      } else {
+        document.body.innerHTML = '<div style="padding:20px;background:#ff4444;color:white;text-align:center;">Error: ' + (error?.message || msg) + '</div>' + document.body.innerHTML;
+      }
+      return true;
+    };
+  </script>
+
+  <!-- Error Display (hidden by default) -->
+  <div id="errorDisplay" class="error-display" style="display:none; position:fixed; top:0; left:0; right:0; background:#ff4444; color:white; padding:10px; text-align:center; z-index:9999; font-size:14px;"></div>
+
+  <!-- Offline Banner -->
+  <div id="offlineBanner" class="offline-banner">📡 Offline Mode - Data will sync when connected</div>
+
+  <!-- Install Prompt -->
+  <div id="installPrompt" class="install-prompt">
+    <span>📱 Install App</span>
+    <button id="installBtn">Install</button>
+    <button id="dismissInstall">✕</button>
+  </div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="header">
+      <h1 class="header-title">🍣 Umami POS</h1>
+      <nav class="header-nav">
+        <button class="nav-btn" onclick="showHistory()">📜 History</button>
+      </nav>
+    </header>
+
+    <!-- Kitchen Content -->
+    <main class="kitchen-container">
+      <div class="kitchen-header">
+        <h1 class="kitchen-title">👨‍🍳 Kitchen Display</h1>
+        <div class="kitchen-stats">
+          <div class="stat-item pending">
+            <div class="stat-value" id="pendingCount">0</div>
+            <div class="stat-label">Waiting</div>
+          </div>
+          <div class="stat-item cooking">
+            <div class="stat-value" id="cookingCount">0</div>
+            <div class="stat-label">Cooking</div>
+          </div>
+          <div class="stat-item completed">
+            <div class="stat-value" id="completedCount">0</div>
+            <div class="stat-label">Done</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="kitchen-filters">
+        <button class="filter-btn active" data-filter="all" onclick="setkitchenFilter('all')">All</button>
+        <button class="filter-btn" data-filter="pending" onclick="setkitchenFilter('pending')">⏳ Waiting</button>
+        <button class="filter-btn" data-filter="cooking" onclick="setkitchenFilter('cooking')">🔥 Cooking</button>
+        <button class="filter-btn" data-filter="completed" onclick="setkitchenFilter('completed')">✓ Done</button>
+      </div>
+
+      <div id="ordersGrid" class="kitchen-grid">
+        <!-- Orders will be rendered here -->
+      </div>
+    </main>
+
+    <!-- History Modal -->
+  <div id="historyModal" class="modal-overlay" onclick="closeAllModals()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2 class="modal-title">📜 Today's Orders</h2>
+        <button class="modal-close" onclick="closeHistory()">✕</button>
+      </div>
+      <div id="historyList" class="modal-body">
+        <!-- History items will be rendered here -->
+      </div>
+      <div class="modal-footer">
+        <button class="export-btn" onclick="exportTodayOrders()">
+          📥 Export Excel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/xlsx.full.min.js?v=20260426a"></script>
+  <script src="/db.js?v=20260426a"></script>
+  <script src="/app.js?v=20260426a"></script>
+</body>
+</html>
