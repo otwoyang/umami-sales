@@ -4,11 +4,6 @@
   "description": "Umami Sales POS System",
   "main": "index.html",
   "scripts": {
-    "build": "echo 'Web app ready for Capacitor'"
-  },
-  "devDependencies": {
-    "@capacitor/cli": "^6.0.0",
-    "@capacitor/core": "^6.0.0",
-    "@capacitor/ios": "^6.0.0"
+    "build": "echo 'Static site'"
   }
 }
