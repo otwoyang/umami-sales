@@ -1,12 +1,19 @@
 // Umami Sales PWA - Supabase + IndexedDB Hybrid Database Module
 // Uses Supabase as primary cloud database, IndexedDB as local cache
+// With automatic cloud sync and retry mechanism
 
 // ==================== SUPABASE CONFIG ====================
 const SUPABASE_URL = 'https://rkydycctjpafgtdwwxqd.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJreWR5Y2N0anBhZmd0ZHd3eHFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDcwOTU3NjUsImV4cCI6MjA2MjY3MTc2NX0.2Ue9R5z9dXj9V5e7R8pTj1nY4wX6qB3mK8cL2sN9dQ0';
 
-// Supabase REST API helper
-async function supabaseRequest(table, options = {}) {
+// ==================== SYNC STATUS TRACKING ====================
+// Track sync status per order: 'pending' (not synced), 'syncing', 'synced', 'failed'
+const SYNC_STORE_NAME = 'syncQueue';
+
+// ==================== SUPABASE HELPERS ====================
+
+// Supabase REST API helper with retry
+async function supabaseRequest(table, options = {}, retries = 3) {
   const { method = 'GET', body = null, params = {} } = options;
   
   let url = `${SUPABASE_URL}/rest/v1/${table}`;
@@ -35,15 +42,194 @@ async function supabaseRequest(table, options = {}) {
   const fetchOptions = { method, headers };
   if (body) fetchOptions.body = JSON.stringify(body);
   
-  try {
-    const response = await fetch(url, fetchOptions);
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
-    return { data, error: null };
-  } catch (error) {
-    console.error(`Supabase ${method} ${table} error:`, error);
-    return { data: null, error: error.message };
+  // Retry logic
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url, fetchOptions);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+      return { data, error: null };
+    } catch (error) {
+      console.log(`[Supabase] ${method} ${table} attempt ${attempt}/${retries} failed:`, error.message);
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 1000 * attempt)); // Exponential backoff
+      } else {
+        console.error(`Supabase ${method} ${table} error:`, error);
+        return { data: null, error: error.message };
+      }
+    }
   }
+}
+
+// Upload single order to cloud (used by sync queue)
+async function uploadOrderToCloud(order) {
+  const cloudOrder = {
+    id: order.id,
+    order_number: order.orderNumber,
+    status: order.status,
+    items: order.items,
+    subtotal: order.subtotal,
+    vat: order.vat,
+    total: order.total,
+    payment_method: order.paymentMethod || 'cash',
+    promise_time: order.promiseTime || 0,
+    created_at: new Date(order.createdAt).toISOString(),
+    updated_at: new Date(order.updatedAt).toISOString(),
+    completed_at: order.completedAt ? new Date(order.completedAt).toISOString() : null
+  };
+  
+  const result = await supabaseRequest('orders', {
+    method: 'POST',
+    body: cloudOrder
+  });
+  
+  return result;
+}
+
+// Check if order exists in cloud
+async function checkCloudOrderExists(orderId) {
+  const result = await supabaseRequest('orders', {
+    params: { where: { id: orderId } }
+  });
+  return result.data && result.data.length > 0;
+}
+
+// ==================== SYNC QUEUE (IndexedDB) ====================
+
+function initSyncDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 2); // Version 2 for new store
+    request.onerror = () => reject(new Error('Failed to open sync database'));
+    request.onsuccess = (event) => resolve(event.target.result);
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains('orders')) {
+        const ordersStore = db.createObjectStore('orders', { keyPath: 'id' });
+        ordersStore.createIndex('status', 'status');
+        ordersStore.createIndex('createdAt', 'createdAt');
+      }
+      if (!db.objectStoreNames.contains('products')) {
+        db.createObjectStore('products', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('settings')) {
+        db.createObjectStore('settings', { keyPath: 'key' });
+      }
+      // New store for sync queue
+      if (!db.objectStoreNames.contains('syncQueue')) {
+        db.createObjectStore('syncQueue', { keyPath: 'orderId' });
+      }
+    };
+  });
+}
+
+async function addToSyncQueue(orderId) {
+  const db = await initSyncDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('syncQueue', 'readwrite');
+    const store = tx.objectStore('syncQueue');
+    const request = store.put({
+      orderId: orderId,
+      addedAt: Date.now(),
+      retryCount: 0
+    });
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function removeFromSyncQueue(orderId) {
+  const db = await initSyncDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('syncQueue', 'readwrite');
+    const store = tx.objectStore('syncQueue');
+    const request = store.delete(orderId);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function getSyncQueue() {
+  const db = await initSyncDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('syncQueue', 'readonly');
+    const store = tx.objectStore('syncQueue');
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+// Process sync queue - call this periodically
+let isProcessingSyncQueue = false;
+
+async function processSyncQueue() {
+  if (isProcessingSyncQueue) return;
+  isProcessingSyncQueue = true;
+  
+  try {
+    const queue = await getSyncQueue();
+    if (queue.length === 0) return;
+    
+    console.log(`[Sync] Processing ${queue.length} orders in sync queue`);
+    
+    for (const item of queue) {
+      try {
+        // Check if order has been in queue long enough (2 second delay)
+        const timeInQueue = Date.now() - item.addedAt;
+        if (timeInQueue < 2000) {
+          console.log(`[Sync] Order ${item.orderId} waiting for delay (${Math.ceil((2000-timeInQueue)/1000)}s remaining)`);
+          continue;
+        }
+        
+        // Get order from local DB
+        const orders = await idbGetAll('orders');
+        const order = orders.find(o => o.id === item.orderId);
+        
+        if (!order) {
+          // Order doesn't exist locally, remove from queue
+          await removeFromSyncQueue(item.orderId);
+          console.log(`[Sync] Order ${item.orderId} not found locally, removed from queue`);
+          continue;
+        }
+        
+        // Check if already in cloud
+        const exists = await checkCloudOrderExists(item.orderId);
+        if (exists) {
+          await removeFromSyncQueue(item.orderId);
+          console.log(`[Sync] Order ${item.orderId} already in cloud, removed from queue`);
+          continue;
+        }
+        
+        // Try to upload
+        const result = await uploadOrderToCloud(order);
+        if (result.error) {
+          console.error(`[Sync] Failed to upload order ${item.orderId}:`, result.error);
+          // Keep in queue for retry
+        } else {
+          await removeFromSyncQueue(item.orderId);
+          console.log(`[Sync] Order ${item.orderId} synced successfully`);
+        }
+      } catch (err) {
+        console.error(`[Sync] Error processing order ${item.orderId}:`, err);
+      }
+    }
+  } finally {
+    isProcessingSyncQueue = false;
+  }
+}
+
+// Start periodic sync check
+let syncInterval = null;
+
+function startSyncScheduler() {
+  if (syncInterval) return;
+  
+  // Process immediately on start (will process all pending orders)
+  setTimeout(processSyncQueue, 2000);
+  
+  // Then check every 30 seconds
+  syncInterval = setInterval(processSyncQueue, 30000);
+  console.log('[Sync] Scheduler started - will check every 30 seconds');
 }
 
 // ==================== INDEXEDDB (Local Cache) ====================
@@ -218,33 +404,8 @@ async function addOrder(orderData) {
     String(now.getHours()).padStart(2, '0'),
     String(now.getMinutes()).padStart(2, '0')
   ].join('');
-  
-  const order = {
-    id: orderId,
-    order_number: orderNumber,
-    status: 'pending',
-    items: orderData.items,
-    subtotal: orderData.subtotal,
-    vat: orderData.vat,
-    total: orderData.total,
-    payment_method: orderData.paymentMethod || 'cash',
-    promise_time: orderData.promiseTime || 0,
-    created_at: now.toISOString(),
-    updated_at: now.toISOString(),
-    completed_at: null
-  };
-  
-  // Save to Supabase
-  const result = await supabaseRequest('orders', {
-    method: 'POST',
-    body: order
-  });
-  
-  if (result.error) {
-    console.error('Failed to save order to cloud:', result.error);
-  }
-  
-  // Also save locally
+
+  // Create local order first
   const localOrder = {
     id: orderId,
     orderNumber: orderNumber,
@@ -253,14 +414,21 @@ async function addOrder(orderData) {
     subtotal: orderData.subtotal,
     vat: orderData.vat,
     total: orderData.total,
-    paymentMethod: orderData.paymentMethod,
-    promiseTime: orderData.promiseTime,
+    paymentMethod: orderData.paymentMethod || 'cash',
+    promiseTime: orderData.promiseTime || 0,
     createdAt: now.getTime(),
     updatedAt: now.getTime(),
     completedAt: null
   };
+
+  // Save to local IndexedDB immediately
   await idbPut('orders', localOrder);
   
+  // Add to sync queue for delayed cloud upload
+  await addToSyncQueue(orderId);
+  
+  console.log(`[Order] Order #${orderNumber} saved locally, will sync to cloud in 2 seconds`);
+
   return localOrder;
 }
 
@@ -373,6 +541,9 @@ window.DB = {
   setSetting,
   // Config
   STORE_CONFIG,
+  // Sync
+  startSyncScheduler,
+  processSyncQueue,
   // For compatibility
   getOrdersByStatus: async (status) => {
     const orders = await getAllOrders();
