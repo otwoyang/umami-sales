@@ -4,7 +4,7 @@
 
 // ==================== SUPABASE CONFIG ====================
 const SUPABASE_URL = 'https://rkydycctjpafgtdwwxqd.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJreWR5Y2N0anBhZmd0ZHd3eHFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDcwOTU3NjUsImV4cCI6MjA2MjY3MTc2NX0.2Ue9R5z9dXj9V5e7R8pTj1nY4wX6qB3mK8cL2sN9dQ0';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJreWR5Y2N0anBhZmd0ZHd3eHFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcyMTYzNzAsImV4cCI6MjA5Mjc5MjM3MH0.B8Vc6kdPKskTgPiNK6Rikwf5jjMasa7XLNAjAqY2Se4';
 
 // ==================== SYNC STATUS TRACKING ====================
 // Track sync status per order: 'pending' (not synced), 'syncing', 'synced', 'failed'
@@ -334,8 +334,9 @@ const DEFAULT_PRODUCTS = [
 ];
 
 async function getAllProducts() {
+  // Step 1: Try network FIRST
   try {
-    // Try Supabase first
+    console.log('[Products] Fetching from cloud...');
     const result = await supabaseRequest('products', { 
       select: '*',
       order: 'sort_order'
@@ -343,7 +344,7 @@ async function getAllProducts() {
     
     if (result.data && result.data.length > 0) {
       console.log('[Products] Loaded', result.data.length, 'products from cloud');
-      // Update local cache
+      // Save to local cache for offline use
       await idbClear('products');
       const products = result.data.map(p => ({
         id: p.id,
@@ -361,12 +362,12 @@ async function getAllProducts() {
       }
       return products;
     }
+    console.log('[Products] Cloud returned empty, trying local cache...');
   } catch (err) {
-    console.log('[Products] Cloud fetch error:', err.message);
+    console.log('[Products] Cloud error:', err.message, '- falling back to local');
   }
   
-  console.log('[Products] Trying local cache...');
-  // Fallback to local cache
+  // Step 2: Fallback to local cache
   try {
     const localProducts = await idbGetAll('products');
     if (localProducts.length > 0) {
@@ -377,69 +378,162 @@ async function getAllProducts() {
     console.log('[Products] Local cache error:', err.message);
   }
   
-  // Last resort: use defaults
-  console.log('[Products] No products found, using defaults');
+  // Step 3: Last resort - use defaults
+  console.log('[Products] Using default products');
+  const defaults = DEFAULT_PRODUCTS.map(p => ({ ...p, createdAt: Date.now(), updatedAt: Date.now() }));
   try {
-    for (const p of DEFAULT_PRODUCTS) {
-      await idbPut('products', { ...p, createdAt: Date.now(), updatedAt: Date.now() });
+    await idbClear('products');
+    for (const p of defaults) {
+      await idbPut('products', p);
     }
+    console.log('[Products] Saved', defaults.length, 'default products to IndexedDB');
   } catch (err) {
-    console.log('[Products] Failed to save defaults to cache:', err.message);
+    console.log('[Products] Failed to save defaults:', err.message);
   }
-  return DEFAULT_PRODUCTS.map(p => ({ ...p, createdAt: Date.now(), updatedAt: Date.now() }));
+  return defaults;
 }
 
 async function initializeDefaultProducts() {
+  console.log('[DEBUG] initializeDefaultProducts called');
   try {
     const products = await getAllProducts();
+    console.log('[DEBUG] getAllProducts returned:', products?.length, 'products');
     
-    if (products.length > 0) {
+    if (products && products.length >= 15) {
       console.log('[DEBUG] Loaded', products.length, 'products');
       return products;
+    }
+    
+    // If less than 15 products, reset to defaults
+    if (products && products.length > 0 && products.length < 15) {
+      console.log('[DEBUG] Only', products.length, 'products found, resetting to defaults...');
     }
   } catch (err) {
     console.error('[DEBUG] getAllProducts failed:', err);
   }
   
   console.log('[DEBUG] Using hardcoded defaults');
-  return DEFAULT_PRODUCTS.map(p => ({ ...p, createdAt: Date.now(), updatedAt: Date.now() }));
+  const defaults = DEFAULT_PRODUCTS.map(p => ({ ...p, createdAt: Date.now(), updatedAt: Date.now() }));
+  console.log('[DEBUG] Default products count:', defaults.length);
+  
+  // Save defaults to IndexedDB
+  try {
+    await idbClear('products');
+    for (const p of defaults) {
+      await idbPut('products', p);
+    }
+    console.log('[DEBUG] Saved', defaults.length, 'default products to IndexedDB');
+  } catch (err) {
+    console.error('[DEBUG] Failed to save defaults:', err);
+  }
+  
+  return defaults;
+}
+
+// Force reset products (exposed for debugging)
+async function forceResetProducts() {
+  console.log('[DEBUG] Force resetting products...');
+  const defaults = DEFAULT_PRODUCTS.map(p => ({ ...p, createdAt: Date.now(), updatedAt: Date.now() }));
+  await idbClear('products');
+  for (const p of defaults) {
+    await idbPut('products', p);
+  }
+  console.log('[DEBUG] Force reset complete:', defaults.length, 'products');
+  alert('Products reset! ' + defaults.length + ' products restored.');
+  return defaults;
+}
+
+// ==================== PRODUCT CRUD (IndexedDB) ====================
+
+// Add product
+async function addProduct(productData) {
+  const product = {
+    id: generateUUID(),
+    ...productData,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  await idbPut('products', product);
+  return product;
+}
+
+// Get active products sorted by sortOrder
+async function getActiveProducts() {
+  const products = await getAllProducts();
+  return products
+    .filter(p => p.isActive !== false)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+// Update product
+async function updateProduct(productId, updates) {
+  const products = await idbGetAll('products');
+  const product = products.find(p => p.id === productId);
+  if (!product) {
+    throw new Error('Product not found');
+  }
+  const updatedProduct = {
+    ...product,
+    ...updates,
+    id: productId,
+    updatedAt: Date.now()
+  };
+  await idbPut('products', updatedProduct);
+  return updatedProduct;
+}
+
+// Delete product
+async function deleteProduct(productId) {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('products', 'readwrite');
+    const store = tx.objectStore('products');
+    const deleteReq = store.delete(productId);
+    deleteReq.onsuccess = () => resolve();
+    deleteReq.onerror = () => reject(new Error('Failed to delete product'));
+  });
 }
 
 // ==================== ORDERS ====================
 
 async function getAllOrders() {
-  // Try Supabase first
-  const result = await supabaseRequest('orders', { 
-    select: '*',
-    order: 'created_at'
-  });
-  
-  if (result.data && result.data.length > 0) {
-    console.log('[Orders] Loaded', result.data.length, 'orders from cloud');
-    // Update local cache
-    await idbClear('orders');
-    const orders = result.data.map(o => ({
-      id: o.id,
-      orderNumber: o.order_number,
-      status: o.status,
-      items: typeof o.items === 'string' ? JSON.parse(o.items) : o.items,
-      subtotal: parseFloat(o.subtotal),
-      vat: parseFloat(o.vat),
-      total: parseFloat(o.total),
-      paymentMethod: o.payment_method,
-      promiseTime: o.promise_time || 0,
-      createdAt: new Date(o.created_at).getTime(),
-      updatedAt: new Date(o.updated_at).getTime(),
-      completedAt: o.completed_at ? new Date(o.completed_at).getTime() : null
-    }));
-    for (const o of orders) {
-      await idbPut('orders', o);
+  // Step 1: Try network FIRST
+  try {
+    console.log('[Orders] Fetching from cloud...');
+    const result = await supabaseRequest('orders', { 
+      select: '*',
+      order: 'created_at'
+    });
+    
+    if (result.data && result.data.length > 0) {
+      console.log('[Orders] Loaded', result.data.length, 'orders from cloud');
+      // Save to local cache
+      await idbClear('orders');
+      const orders = result.data.map(o => ({
+        id: o.id,
+        orderNumber: o.order_number,
+        status: o.status,
+        items: typeof o.items === 'string' ? JSON.parse(o.items) : o.items,
+        subtotal: parseFloat(o.subtotal),
+        vat: parseFloat(o.vat),
+        total: parseFloat(o.total),
+        paymentMethod: o.payment_method,
+        promiseTime: o.promise_time || 0,
+        createdAt: new Date(o.created_at).getTime(),
+        updatedAt: new Date(o.updated_at).getTime(),
+        completedAt: o.completed_at ? new Date(o.completed_at).getTime() : null
+      }));
+      for (const o of orders) {
+        await idbPut('orders', o);
+      }
+      return orders;
     }
-    return orders;
+    console.log('[Orders] Cloud returned empty');
+  } catch (err) {
+    console.log('[Orders] Cloud error:', err.message, '- falling back to local');
   }
   
-  console.log('[Orders] Cloud fetch failed or empty, using local cache');
-  // Fallback to local cache (NEVER return empty if local has data)
+  // Step 2: Fallback to local cache
   const localOrders = await idbGetAll('orders');
   if (localOrders.length > 0) {
     console.log('[Orders] Loaded', localOrders.length, 'orders from local cache');
@@ -591,8 +685,13 @@ window.DB = {
   deleteOrder,
   getTodaySales,
   // Products
+  addProduct,
   getAllProducts,
+  getActiveProducts,
+  updateProduct,
+  deleteProduct,
   initializeDefaultProducts,
+  forceResetProducts,
   // Settings
   getSetting,
   setSetting,
@@ -607,3 +706,6 @@ window.DB = {
     return orders.filter(o => o.status === status);
   }
 };
+
+// Also expose forceResetProducts globally for easy access
+window.forceResetProducts = forceResetProducts;

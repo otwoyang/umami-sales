@@ -129,19 +129,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // Initialize database
+    console.log('[DEBUG] Step 1: Initializing database...');
     await DB.initDB();
+    console.log('[DEBUG] Step 1: Database initialized');
 
     // Start cloud sync scheduler (checks every 30 seconds)
     DB.startSyncScheduler();
 
     // Initialize products
+    console.log('[DEBUG] Step 2: Initializing products...');
     products = await DB.initializeDefaultProducts();
+    console.log('[DEBUG] Step 2: Products initialized, count:', products.length);
+    console.log('[DEBUG] Products:', JSON.stringify(products.slice(0, 3)));
 
     // Load page-specific content
     const page = document.body.dataset.page;
+    console.log('[DEBUG] Step 3: Page type:', page);
 
     if (page === 'order') {
+      console.log('[DEBUG] Step 3: Calling initOrderPage...');
       await initOrderPage();
+      console.log('[DEBUG] Step 3: initOrderPage completed');
     } else if (page === 'kitchen') {
       await initkitchenPage();
     }
@@ -151,8 +159,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Setup offline detection
     setupOfflineDetection();
+    
+    console.log('[DEBUG] Initialization completed successfully!');
   } catch (error) {
-    console.error('Init error:', error);
+    console.error('[ERROR] Init error:', error);
     alert('Error: ' + error.message);
   }
 });
@@ -367,17 +377,28 @@ function updateOrderDisplay() {
 }
 
 async function completeOrder(paymentMethod) {
-  if (currentOrder.items.length === 0) return;
+  alert('completeOrder called with: ' + paymentMethod);
+  console.log('[DEBUG] completeOrder called with:', paymentMethod);
+  console.log('[DEBUG] currentOrder:', currentOrder);
+  
+  if (currentOrder.items.length === 0) {
+    alert('No items in order!');
+    console.log('[DEBUG] No items in order');
+    return;
+  }
+  alert('Starting order process...');
 
   try {
+    console.log('[DEBUG] Step 1: Calling DB.addOrder...');
     const order = await DB.addOrder({
       items: [...currentOrder.items],
       subtotal: currentOrder.subtotal,
       vat: currentOrder.vat,
       total: currentOrder.total,
       paymentMethod,
-      promiseTime: promiseTimeMinutes // Store promise time
+      promiseTime: promiseTimeMinutes
     });
+    console.log('[DEBUG] Step 1: DB.addOrder completed, order:', order);
 
     // Reset promise time after order
     promiseTimeMinutes = 0;
@@ -386,20 +407,32 @@ async function completeOrder(paymentMethod) {
       promiseBtn.classList.remove('active');
       promiseBtn.textContent = '⏳';
     }
+    console.log('[DEBUG] Step 2: Promise time reset');
 
     // Show receipt
+    console.log('[DEBUG] Step 3: Calling showReceipt...');
     showReceipt(order);
+    console.log('[DEBUG] Step 3: showReceipt called');
 
     // Clear current order
+    console.log('[DEBUG] Step 4: Calling clearOrder...');
     clearOrder();
+    console.log('[DEBUG] Step 4: clearOrder called');
 
     // Update sales display and ETA
+    console.log('[DEBUG] Step 5: Calling updateTodaySales...');
     await updateTodaySales();
+    console.log('[DEBUG] Step 5: updateTodaySales completed');
+    
+    console.log('[DEBUG] Step 6: Calling updateETA...');
     await updateETA();
+    console.log('[DEBUG] Step 6: updateETA completed');
+    
+    console.log('[DEBUG] completeOrder finished successfully!');
 
   } catch (error) {
-    console.error('Failed to complete order:', error);
-    alert('Failed to complete order. Please try again.');
+    console.error('[ERROR] Failed to complete order:', error);
+    alert('Failed to complete order. Please try again. Error: ' + error.message);
   }
 }
 

@@ -1,5 +1,5 @@
 // Umami Sales PWA - Service Worker (iOS Optimized)
-const CACHE_NAME = 'umami-sales'; // Simple name for iOS compatibility
+const CACHE_NAME = 'umami-sales-v20260426c'; // Versioned for updates
 
 const STATIC_ASSETS = [
   '/',
