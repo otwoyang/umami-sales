@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Umami Sales - Cloud Sync Fix</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    h1 { color: #e94560; }
+    .info { background: #16213e; padding: 15px; border-radius: 8px; margin: 10px 0; }
+    .success { color: #4ecca3; }
+    .error { color: #ff6b6b; }
+    button {
+      background: #e94560;
+      color: white;
+      border: none;
+      padding: 15px 30px;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      margin: 5px;
+    }
+    button:hover { background: #ff6b6b; }
+    button:disabled { background: #555; cursor: not-allowed; }
+    pre {
+      background: #0f0f23;
+      padding: 15px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 12px;
+    }
+    .log { margin-top: 20px; }
+    .log-entry { padding: 5px; border-bottom: 1px solid #333; }
+  </style>
+</head>
+<body>
+  <h1>🔧 Cloud Sync Fix</h1>
+  <p>This tool will sync your local orders to the cloud and ensure all devices see the same data.</p>
+
+  <div class="info">
+    <strong>Device:</strong> <span id="deviceInfo">Detecting...</span><br>
+    <strong>IndexedDB Orders:</strong> <span id="localCount">-</span><br>
+    <strong>Cloud Orders:</strong> <span id="cloudCount">-</span>
+  </div>
+
+  <div id="actions">
+    <button id="syncBtn" onclick="runSync()">🔄 Sync to Cloud</button>
+    <button id="downloadBtn" onclick="downloadFromCloud()">☁️ Download from Cloud</button>
+  </div>
+
+  <div class="log" id="log"></div>
+
+  <script>
+    const SUPABASE_URL = 'https://rkydycctjpafgtdwwxqd.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJreWR5Y2N0anBhZmd0ZHd3eHFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDcwOTU3NjUsImV4cCI6MjA2MjY3MTc2NX0.2Ue9R5z9dXj9V5e7R8pTj1nY4wX6qB3mK8cL2sN9dQ0';
+
+    // DB Configuration
+    const DB_NAME = 'UmamiSalesDB_v2';
+    let dbInstance = null;
+
+    function log(msg, type = 'info') {
+      const logEl = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry ' + type;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logEl.prepend(entry);
+      console.log(msg);
+    }
+
+    async function initDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onerror = () => reject(new Error('Failed to open database'));
+        request.onsuccess = (event) => {
+          dbInstance = event.target.result;
+          resolve(dbInstance);
+        };
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains('orders')) {
+            db.createObjectStore('orders', { keyPath: 'id' });
+          }
+        };
+      });
+    }
+
+    async function getLocalOrders() {
+      const db = await initDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('orders', 'readonly');
+        const store = tx.objectStore('orders');
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    async function saveLocalOrder(order) {
+      const db = await initDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('orders', 'readwrite');
+        const store = tx.objectStore('orders');
+        const request = store.put(order);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    async function clearLocalOrders() {
+      const db = await initDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('orders', 'readwrite');
+        const store = tx.objectStore('orders');
+        const request = store.clear();
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    async function supabaseRequest(table, options = {}) {
+      const { method = 'GET', body = null, params = {} } = options;
+
+      let url = `${SUPABASE_URL}/rest/v1/${table}`;
+      const queryParts = [];
+      if (options.select) queryParts.push(`select=${options.select}`);
+      if (options.order) queryParts.push(`order=${options.order}`);
+      if (params.where) {
+        Object.entries(params.where).forEach(([key, value]) => {
+          queryParts.push(`${key}=eq.${encodeURIComponent(value)}`);
+        });
+      }
+      if (queryParts.length > 0) {
+        url += '?' + queryParts.join('&');
+      }
+
+      const headers = {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': method === 'POST' ? 'return=representation' : ''
+      };
+
+      const fetchOptions = { method, headers };
+      if (body) fetchOptions.body = JSON.stringify(body);
+
+      const response = await fetch(url, fetchOptions);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+      return data;
+    }
+
+    async function init() {
+      // Detect device
+      const isIPhone = /iPhone/.test(navigator.userAgent);
+      const isIPad = /iPad/.test(navigator.userAgent);
+      const isMac = /Mac/.test(navigator.userAgent) && !isIPhone && !isIPad;
+
+      let deviceName = 'Unknown';
+      if (isIPhone) deviceName = 'iPhone';
+      else if (isIPad) deviceName = 'iPad';
+      else if (isMac) deviceName = 'Mac';
+      else deviceName = navigator.platform;
+
+      document.getElementById('deviceInfo').textContent = deviceName;
+
+      // Get local orders
+      const localOrders = await getLocalOrders();
+      document.getElementById('localCount').textContent = localOrders.length;
+
+      // Get cloud orders
+      try {
+        const cloudOrders = await supabaseRequest('orders', { select: '*', order: 'created_at' });
+        document.getElementById('cloudCount').textContent = cloudOrders.length || 0;
+      } catch (e) {
+        document.getElementById('cloudCount').textContent = 'Error: ' + e.message;
+      }
+    }
+
+    async function runSync() {
+      const btn = document.getElementById('syncBtn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Syncing...';
+
+      try {
+        log('Starting sync to cloud...');
+
+        // Get local orders
+        const localOrders = await getLocalOrders();
+        log(`Found ${localOrders.length} local orders`);
+
+        // Get cloud orders
+        let cloudOrders = [];
+        try {
+          cloudOrders = await supabaseRequest('orders', { select: '*' });
+          log(`Found ${cloudOrders.length} cloud orders`);
+        } catch (e) {
+          log(`Could not fetch cloud orders: ${e.message}`, 'error');
+        }
+
+        // Find orders that exist locally but not in cloud
+        const cloudIds = new Set(cloudOrders.map(o => o.id));
+        const toUpload = localOrders.filter(o => !cloudIds.has(o.id));
+
+        log(`Need to upload ${toUpload.length} orders`);
+
+        for (const order of toUpload) {
+          try {
+            // Format for Supabase
+            const cloudOrder = {
+              id: order.id,
+              order_number: order.orderNumber,
+              status: order.status,
+              items: order.items,
+              subtotal: order.subtotal,
+              vat: order.vat,
+              total: order.total,
+              payment_method: order.paymentMethod,
+              promise_time: order.promiseTime || 0,
+              created_at: new Date(order.createdAt).toISOString(),
+              updated_at: new Date(order.updatedAt).toISOString(),
+              completed_at: order.completedAt ? new Date(order.completedAt).toISOString() : null
+            };
+
+            await supabaseRequest('orders', { method: 'POST', body: cloudOrder });
+            log(`Uploaded order #${order.orderNumber}`, 'success');
+          } catch (e) {
+            log(`Failed to upload order #${order.orderNumber}: ${e.message}`, 'error');
+          }
+        }
+
+        // Refresh counts
+        await init();
+
+        log('Sync complete!', 'success');
+        alert('Sync complete! Check the log for details.');
+
+      } catch (error) {
+        log(`Sync failed: ${error.message}`, 'error');
+        alert('Sync failed: ' + error.message);
+      }
+
+      btn.disabled = false;
+      btn.textContent = '🔄 Sync to Cloud';
+    }
+
+    async function downloadFromCloud() {
+      const btn = document.getElementById('downloadBtn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Downloading...';
+
+      try {
+        log('Starting download from cloud...');
+
+        // Clear local
+        await clearLocalOrders();
+        log('Cleared local orders');
+
+        // Get cloud orders
+        const cloudOrders = await supabaseRequest('orders', { select: '*', order: 'created_at' });
+        log(`Found ${cloudOrders.length} cloud orders`);
+
+        // Save to local
+        for (const o of cloudOrders) {
+          const localOrder = {
+            id: o.id,
+            orderNumber: o.order_number,
+            status: o.status,
+            items: typeof o.items === 'string' ? JSON.parse(o.items) : o.items,
+            subtotal: parseFloat(o.subtotal),
+            vat: parseFloat(o.vat),
+            total: parseFloat(o.total),
+            paymentMethod: o.payment_method,
+            promiseTime: o.promise_time,
+            createdAt: new Date(o.created_at).getTime(),
+            updatedAt: new Date(o.updated_at).getTime(),
+            completedAt: o.completed_at ? new Date(o.completed_at).getTime() : null
+          };
+          await saveLocalOrder(localOrder);
+          log(`Saved order #${o.order_number} locally`, 'success');
+        }
+
+        // Refresh counts
+        await init();
+
+        log('Download complete!', 'success');
+        alert('Download complete! Now refresh the app to see the orders.');
+
+      } catch (error) {
+        log(`Download failed: ${error.message}`, 'error');
+        alert('Download failed: ' + error.message);
+      }
+
+      btn.disabled = false;
+      btn.textContent = '☁️ Download from Cloud';
+    }
+
+    init();
+  </script>
+</body>
+</html>
