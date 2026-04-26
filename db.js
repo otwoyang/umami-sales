@@ -1,69 +1,119 @@
-// Umami Sales PWA - IndexedDB Database Module
+// Umami Sales PWA - Supabase + IndexedDB Hybrid Database Module
+// Uses Supabase as primary cloud database, IndexedDB as local cache
 
-const DB_NAME = 'UmamiSalesDB';
-const DB_VERSION = 1;
+// ==================== SUPABASE CONFIG ====================
+const SUPABASE_URL = 'https://rkydycctjpafgtdwwxqd.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJreWR5Y2N0anBhZmd0ZHd3eHFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDcwOTU3NjUsImV4cCI6MjA2MjY3MTc2NX0.2Ue9R5z9dXj9V5e7R8pTj1nY4wX6qB3mK8cL2sN9dQ0';
 
-// Store configurations
-const STORES = {
-  orders: {
-    keyPath: 'id',
-    indexes: [
-      { name: 'status', keyPath: 'status' },
-      { name: 'createdAt', keyPath: 'createdAt' },
-      { name: 'orderNumber', keyPath: 'orderNumber' }
-    ]
-  },
-  products: {
-    keyPath: 'id',
-    indexes: [
-      { name: 'category', keyPath: 'category' },
-      { name: 'sortOrder', keyPath: 'sortOrder' }
-    ]
-  },
-  settings: {
-    keyPath: 'key'
+// Supabase REST API helper
+async function supabaseRequest(table, options = {}) {
+  const { method = 'GET', body = null, params = {} } = options;
+  
+  let url = `${SUPABASE_URL}/rest/v1/${table}`;
+  
+  // Build query params
+  const queryParts = [];
+  if (options.select) queryParts.push(`select=${options.select}`);
+  if (options.order) queryParts.push(`order=${options.order}`);
+  if (options.limit) queryParts.push(`limit=${options.limit}`);
+  if (params.where) {
+    Object.entries(params.where).forEach(([key, value]) => {
+      queryParts.push(`${key}=eq.${encodeURIComponent(value)}`);
+    });
   }
-};
+  if (queryParts.length > 0) {
+    url += '?' + queryParts.join('&');
+  }
+  
+  const headers = {
+    'apikey': SUPABASE_ANON_KEY,
+    'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+    'Content-Type': 'application/json',
+    'Prefer': method === 'POST' ? 'return=representation' : ''
+  };
+  
+  const fetchOptions = { method, headers };
+  if (body) fetchOptions.body = JSON.stringify(body);
+  
+  try {
+    const response = await fetch(url, fetchOptions);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+    return { data, error: null };
+  } catch (error) {
+    console.error(`Supabase ${method} ${table} error:`, error);
+    return { data: null, error: error.message };
+  }
+}
+
+// ==================== INDEXEDDB (Local Cache) ====================
+const DB_NAME = 'UmamiSalesDB_v2';
+const DB_VERSION = 1;
 
 let dbInstance = null;
 
-// Initialize database
 function initDB() {
   return new Promise((resolve, reject) => {
-    // Always open a fresh connection on iOS Safari
-    // to avoid issues with closed connections
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onerror = () => {
-      reject(new Error('Failed to open database'));
-    };
-
+    
+    request.onerror = () => reject(new Error('Failed to open database'));
+    
     request.onsuccess = (event) => {
       dbInstance = event.target.result;
       resolve(dbInstance);
     };
-
+    
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
-
-      // Create stores
+      
       if (!db.objectStoreNames.contains('orders')) {
         const ordersStore = db.createObjectStore('orders', { keyPath: 'id' });
-        ordersStore.createIndex('status', 'status', { unique: false });
-        ordersStore.createIndex('createdAt', 'createdAt', { unique: false });
-        ordersStore.createIndex('orderNumber', 'orderNumber', { unique: false });
+        ordersStore.createIndex('status', 'status');
+        ordersStore.createIndex('createdAt', 'createdAt');
       }
-
+      
       if (!db.objectStoreNames.contains('products')) {
-        const productsStore = db.createObjectStore('products', { keyPath: 'id' });
-        productsStore.createIndex('category', 'category', { unique: false });
-        productsStore.createIndex('sortOrder', 'sortOrder', { unique: false });
+        db.createObjectStore('products', { keyPath: 'id' });
       }
-
+      
       if (!db.objectStoreNames.contains('settings')) {
         db.createObjectStore('settings', { keyPath: 'key' });
       }
     };
+  });
+}
+
+// IndexedDB helper functions
+async function idbGetAll(storeName) {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readonly');
+    const store = tx.objectStore(storeName);
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function idbPut(storeName, data) {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    const store = tx.objectStore(storeName);
+    const request = store.put(data);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function idbClear(storeName) {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    const store = tx.objectStore(storeName);
+    const request = store.clear();
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
   });
 }
 
@@ -76,396 +126,226 @@ function generateUUID() {
   });
 }
 
+// ==================== PRODUCTS ====================
+
+async function getAllProducts() {
+  // Try Supabase first
+  const result = await supabaseRequest('products', { 
+    select: '*',
+    order: 'sort_order'
+  });
+  
+  if (result.data && result.data.length > 0) {
+    // Update local cache
+    await idbClear('products');
+    const products = result.data.map(p => ({
+      id: p.id,
+      name: p.name,
+      price: parseFloat(p.price),
+      taxPercent: parseFloat(p.tax_percent),
+      category: p.category,
+      sortOrder: p.sort_order,
+      isActive: p.is_active,
+      createdAt: new Date(p.created_at).getTime(),
+      updatedAt: new Date(p.updated_at).getTime()
+    }));
+    for (const p of products) {
+      await idbPut('products', p);
+    }
+    return products;
+  }
+  
+  // Fallback to local cache
+  return idbGetAll('products');
+}
+
+async function initializeDefaultProducts() {
+  const products = await getAllProducts();
+  
+  if (products.length > 0) {
+    console.log('[DEBUG] Loaded', products.length, 'products from cloud');
+    return products;
+  }
+  
+  console.log('[DEBUG] No products in cloud, using defaults');
+  // If cloud is empty, return empty (shouldn't happen with seeded data)
+  return [];
+}
+
 // ==================== ORDERS ====================
 
-// Generate order number based on date+time: YYYYMMDDHHMI
-function generateOrderNumber() {
+async function getAllOrders() {
+  // Try Supabase first
+  const result = await supabaseRequest('orders', { 
+    select: '*',
+    order: 'created_at'
+  });
+  
+  if (result.data && result.data.length > 0) {
+    // Update local cache
+    await idbClear('orders');
+    const orders = result.data.map(o => ({
+      id: o.id,
+      orderNumber: o.order_number,
+      status: o.status,
+      items: typeof o.items === 'string' ? JSON.parse(o.items) : o.items,
+      subtotal: parseFloat(o.subtotal),
+      vat: parseFloat(o.vat),
+      total: parseFloat(o.total),
+      paymentMethod: o.payment_method,
+      promiseTime: o.promise_time,
+      createdAt: new Date(o.created_at).getTime(),
+      updatedAt: new Date(o.updated_at).getTime(),
+      completedAt: o.completed_at ? new Date(o.completed_at).getTime() : null
+    }));
+    for (const o of orders) {
+      await idbPut('orders', o);
+    }
+    return orders;
+  }
+  
+  // Fallback to local cache
+  return idbGetAll('orders');
+}
+
+async function addOrder(orderData) {
+  const orderId = generateUUID();
   const now = new Date();
-  return [
+  const orderNumber = [
     now.getFullYear(),
     String(now.getMonth() + 1).padStart(2, '0'),
     String(now.getDate()).padStart(2, '0'),
     String(now.getHours()).padStart(2, '0'),
     String(now.getMinutes()).padStart(2, '0')
   ].join('');
-}
-
-// Add a new order
-async function addOrder(orderData) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(['orders'], 'readwrite');
-    const ordersStore = transaction.objectStore('orders');
-
-    const order = {
-      id: generateUUID(),
-      orderNumber: generateOrderNumber(),
-      status: 'pending',
-      items: orderData.items,
-      subtotal: orderData.subtotal,
-      vat: orderData.vat,
-      total: orderData.total,
-      paymentMethod: orderData.paymentMethod,
-      promiseTime: orderData.promiseTime || 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      completedAt: null
-    };
-
-    const addReq = ordersStore.add(order);
-    addReq.onsuccess = () => {
-      resolve(order);
-    };
-    addReq.onerror = () => {
-      reject(new Error('Failed to add order'));
-    };
+  
+  const order = {
+    id: orderId,
+    order_number: orderNumber,
+    status: 'pending',
+    items: orderData.items,
+    subtotal: orderData.subtotal,
+    vat: orderData.vat,
+    total: orderData.total,
+    payment_method: orderData.paymentMethod || 'cash',
+    promise_time: orderData.promiseTime || 0,
+    created_at: now.toISOString(),
+    updated_at: now.toISOString(),
+    completed_at: null
+  };
+  
+  // Save to Supabase
+  const result = await supabaseRequest('orders', {
+    method: 'POST',
+    body: order
   });
+  
+  if (result.error) {
+    console.error('Failed to save order to cloud:', result.error);
+  }
+  
+  // Also save locally
+  const localOrder = {
+    id: orderId,
+    orderNumber: orderNumber,
+    status: 'pending',
+    items: orderData.items,
+    subtotal: orderData.subtotal,
+    vat: orderData.vat,
+    total: orderData.total,
+    paymentMethod: orderData.paymentMethod,
+    promiseTime: orderData.promiseTime,
+    createdAt: now.getTime(),
+    updatedAt: now.getTime(),
+    completedAt: null
+  };
+  await idbPut('orders', localOrder);
+  
+  return localOrder;
 }
 
-// Get all orders
-async function getAllOrders() {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction('orders', 'readonly');
-    const store = transaction.objectStore('orders');
-    const request = store.getAll();
-
-    request.onsuccess = () => {
-      resolve(request.result);
-    };
-    request.onerror = () => {
-      reject(new Error('Failed to get orders'));
-    };
+async function updateOrderStatus(orderId, newStatus) {
+  const now = new Date();
+  const updateData = {
+    status: newStatus,
+    updated_at: now.toISOString()
+  };
+  
+  if (newStatus === 'completed') {
+    updateData.completed_at = now.toISOString();
+  }
+  
+  // Update in Supabase
+  await supabaseRequest('orders', {
+    method: 'PATCH',
+    params: { where: { id: orderId } },
+    body: updateData
   });
+  
+  // Update locally
+  const orders = await idbGetAll('orders');
+  const order = orders.find(o => o.id === orderId);
+  if (order) {
+    order.status = newStatus;
+    order.updatedAt = now.getTime();
+    if (newStatus === 'completed') {
+      order.completedAt = now.getTime();
+    }
+    await idbPut('orders', order);
+    return order;
+  }
+  
+  return null;
 }
 
-// Get orders by status
-async function getOrdersByStatus(status) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction('orders', 'readonly');
-    const store = transaction.objectStore('orders');
-    const index = store.index('status');
-    const request = index.getAll(status);
-
-    request.onsuccess = () => {
-      resolve(request.result);
-    };
-    request.onerror = () => {
-      reject(new Error('Failed to get orders by status'));
-    };
-  });
-}
-
-// Get today's orders (non-deleted)
 async function getTodayOrders() {
   const orders = await getAllOrders();
   const today = new Date().toDateString();
-
+  
   return orders.filter(order => {
     const orderDate = new Date(order.createdAt).toDateString();
     return orderDate === today && order.status !== 'deleted';
   });
 }
 
-// Update order status
-async function updateOrderStatus(orderId, newStatus) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction('orders', 'readwrite');
-    const store = transaction.objectStore('orders');
-    const getReq = store.get(orderId);
-
-    getReq.onsuccess = () => {
-      const order = getReq.result;
-      if (!order) {
-        reject(new Error('Order not found'));
-        return;
-      }
-
-      order.status = newStatus;
-      order.updatedAt = Date.now();
-      if (newStatus === 'completed') {
-        order.completedAt = Date.now();
-      }
-
-      const putReq = store.put(order);
-      putReq.onsuccess = () => {
-        resolve(order);
-      };
-      putReq.onerror = () => {
-        reject(new Error('Failed to update order'));
-      };
-    };
-  });
-}
-
-// Soft delete order
-async function deleteOrder(orderId) {
-  return updateOrderStatus(orderId, 'deleted');
-}
-
-// Get today's total sales
 async function getTodaySales() {
   const orders = await getTodayOrders();
   return orders.reduce((sum, order) => sum + order.total, 0);
 }
 
-// ==================== PRODUCTS ====================
-
-// Add a product
-async function addProduct(productData) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction('products', 'readwrite');
-    const store = transaction.objectStore('products');
-
-    const product = {
-      id: generateUUID(),
-      ...productData,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-
-    const addReq = store.add(product);
-    addReq.onsuccess = () => {
-      resolve(product);
-    };
-    addReq.onerror = () => {
-      reject(new Error('Failed to add product'));
-    };
-  });
-}
-
-// Get all products
-async function getAllProducts() {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction('products', 'readonly');
-    const store = transaction.objectStore('products');
-    const request = store.getAll();
-
-    request.onsuccess = () => {
-      resolve(request.result);
-    };
-    request.onerror = () => {
-      reject(new Error('Failed to get products'));
-    };
-  });
-}
-
-// Get active products sorted by sortOrder
-async function getActiveProducts() {
-  const products = await getAllProducts();
-  return products
-    .filter(p => p.isActive !== false)
-    .sort((a, b) => a.sortOrder - b.sortOrder);
-}
-
-// Update product
-async function updateProduct(productId, updates) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction('products', 'readwrite');
-    const store = transaction.objectStore('products');
-    const getReq = store.get(productId);
-
-    getReq.onsuccess = () => {
-      const product = getReq.result;
-      if (!product) {
-        reject(new Error('Product not found'));
-        return;
-      }
-
-      const updatedProduct = {
-        ...product,
-        ...updates,
-        id: productId,
-        updatedAt: Date.now()
-      };
-
-      const putReq = store.put(updatedProduct);
-      putReq.onsuccess = () => {
-        resolve(updatedProduct);
-      };
-      putReq.onerror = () => {
-        reject(new Error('Failed to update product'));
-      };
-    };
-  });
-}
-
-// Delete product
-async function deleteProduct(productId) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction('products', 'readwrite');
-    const store = transaction.objectStore('products');
-    const deleteReq = store.delete(productId);
-
-    deleteReq.onsuccess = () => {
-      resolve();
-    };
-    deleteReq.onerror = () => {
-      reject(new Error('Failed to delete product'));
-    };
-  });
-}
-
-// Initialize default products
-// Use IndexedDB setting + sessionStorage to prevent race conditions between iframes
-const PRODUCTS_INIT_KEY = 'productsInitialized';
-
-// Force reset products - declare early so it's available immediately
-window.forceResetProducts = async function forceResetProducts() {
-  console.log('[FORCE RESET] Starting...');
-  
-  // Clear products
-  const db = await initDB();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction('products', 'readwrite');
-    const req = tx.objectStore('products').clear();
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-    req.onerror = () => reject(req.error);
-  });
-  
-  // Clear initialization flags
-  await setSetting(PRODUCTS_INIT_KEY, false);
-  try { sessionStorage.removeItem('productsInitLock'); } catch(e) {}
-  
-  console.log('[FORCE RESET] Done. Reloading...');
-  location.reload();
-};
-
-async function initializeDefaultProducts() {
-  // First check: sessionStorage lock to prevent race conditions between iframes
-  try {
-    if (sessionStorage.getItem('productsInitLock') === 'true') {
-      console.log('[DEBUG] Another page is initializing products, waiting...');
-      // Wait and then return products
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      const products = await getAllProducts();
-      console.log('[DEBUG] Returning products after wait:', products.length);
-      return products;
-    }
-    sessionStorage.setItem('productsInitLock', 'true');
-  } catch(e) {
-    console.log('[DEBUG] sessionStorage not available');
-  }
-  
-  // Check existing products FIRST - before any initialization logic
-  const existingProducts = await getAllProducts();
-  const expectedCount = 15; // We expect exactly 15 products
-  
-  console.log('[DEBUG] initializeDefaultProducts - existing products:', existingProducts.length, 'expected:', expectedCount);
-  
-  // CRITICAL: If we have 15 products (or more), just return them - DO NOT reinitialize
-  // This prevents duplicate products from being added
-  if (existingProducts.length >= expectedCount) {
-    console.log('[DEBUG] Already have', existingProducts.length, 'products, using existing. No reinitialization needed.');
-    try { sessionStorage.removeItem('productsInitLock'); } catch(e) {}
-    return existingProducts;
-  }
-  
-  // If we get here, we have < 15 products (either 0 or partial). Need to reset to 15.
-  console.log('[DEBUG] Product count is', existingProducts.length, '- resetting to', expectedCount, 'defaults');
-
-  // Clear existing products first
-  const dbForClear = await initDB();
-  await new Promise((resolve, reject) => {
-    const tx = dbForClear.transaction('products', 'readwrite');
-    const req = tx.objectStore('products').clear();
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-    req.onerror = () => reject(req.error);
-  });
-  
-  // Mark as initialized
-  await setSetting(PRODUCTS_INIT_KEY, true);
-
-  const defaultProducts = [
-    { name: 'Pieni Sushi', price: 11.5, taxPercent: 13.5, category: 'sushi', sortOrder: 1, isActive: true },
-    { name: 'Pieni+ Sushi', price: 14, taxPercent: 13.5, category: 'sushi', sortOrder: 2, isActive: true },
-    { name: 'Medium Sushi', price: 16.5, taxPercent: 13.5, category: 'sushi', sortOrder: 3, isActive: true },
-    { name: 'Iso Sushi', price: 19.5, taxPercent: 13.5, category: 'sushi', sortOrder: 4, isActive: true },
-    { name: 'Drink', price: 2, taxPercent: 13.5, category: 'drink', sortOrder: 5, isActive: true },
-    { name: 'Nigri', price: 1.8, taxPercent: 13.5, category: 'drink', sortOrder: 6, isActive: true },
-    { name: '*Take away', price: 0, taxPercent: 13.5, category: 'addon', sortOrder: 7, isActive: true },
-    { name: '-Student', price: 0, taxPercent: 13.5, category: 'discount', sortOrder: 8, isActive: true },
-    { name: '-Vege', price: 0, taxPercent: 13.5, category: 'discount', sortOrder: 9, isActive: true },
-    { name: '-Vegan', price: 0, taxPercent: 13.5, category: 'discount', sortOrder: 10, isActive: true },
-    { name: '-All Fry', price: 0, taxPercent: 13.5, category: 'discount', sortOrder: 11, isActive: true },
-    { name: '-All Raw', price: 0, taxPercent: 13.5, category: 'discount', sortOrder: 12, isActive: true },
-    { name: '-No Mayo', price: 0, taxPercent: 13.5, category: 'discount', sortOrder: 13, isActive: true },
-    { name: '-No Dessert', price: 0, taxPercent: 13.5, category: 'discount', sortOrder: 14, isActive: true },
-    { name: '-No Tofu(GF)', price: 0, taxPercent: 13.5, category: 'discount', sortOrder: 15, isActive: true }
-  ];
-
-  const db = await initDB();
-  const transaction = db.transaction('products', 'readwrite');
-  const store = transaction.objectStore('products');
-  const savedProducts = [];
-
-  for (const product of defaultProducts) {
-    const savedProduct = {
-      id: generateUUID(),
-      ...product,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-    savedProducts.push(savedProduct);
-
-    await new Promise((resolve, reject) => {
-      const req = store.add(savedProduct);
-      req.onsuccess = resolve;
-      req.onerror = reject;
-    });
-  }
-
-  // Mark as initialized in settings
-  await setSetting(PRODUCTS_INIT_KEY, true);
-
-  return savedProducts;
+async function deleteOrder(orderId) {
+  return updateOrderStatus(orderId, 'deleted');
 }
 
 // ==================== SETTINGS ====================
 
-// Get setting
 async function getSetting(key) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction('settings', 'readonly');
-    const store = transaction.objectStore('settings');
-    const request = store.get(key);
-
-    request.onsuccess = () => {
-      resolve(request.result?.value);
-    };
-    request.onerror = () => {
-      reject(new Error('Failed to get setting'));
-    };
+  const result = await supabaseRequest('settings', {
+    params: { where: { key: key } }
   });
+  
+  if (result.data && result.data.length > 0) {
+    return result.data[0].value;
+  }
+  
+  // Fallback
+  const settings = await idbGetAll('settings');
+  const setting = settings.find(s => s.key === key);
+  return setting?.value;
 }
 
-// Set setting
 async function setSetting(key, value) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction('settings', 'readwrite');
-    const store = transaction.objectStore('settings');
-    const request = store.put({ key, value, updatedAt: Date.now() });
-
-    request.onsuccess = () => {
-      resolve();
-    };
-    request.onerror = () => {
-      reject(new Error('Failed to set setting'));
-    };
+  // Save to Supabase
+  await supabaseRequest('settings', {
+    method: 'POST',
+    body: { key, value, updated_at: new Date().toISOString() }
   });
+  
+  // Save locally
+  await idbPut('settings', { key, value, updatedAt: Date.now() });
 }
 
-// Store configuration
+// ==================== CONFIG ====================
 const STORE_CONFIG = {
   companyName: 'Guaimost Oy',
   storeName: 'Umami Sushi',
@@ -475,27 +355,27 @@ const STORE_CONFIG = {
   address: ''
 };
 
-// Export all functions
+// ==================== EXPORT ====================
 window.DB = {
   initDB,
   // Orders
   addOrder,
   getAllOrders,
-  getOrdersByStatus,
   getTodayOrders,
   updateOrderStatus,
   deleteOrder,
   getTodaySales,
   // Products
-  addProduct,
   getAllProducts,
-  getActiveProducts,
-  updateProduct,
-  deleteProduct,
   initializeDefaultProducts,
   // Settings
   getSetting,
   setSetting,
   // Config
-  STORE_CONFIG
+  STORE_CONFIG,
+  // For compatibility
+  getOrdersByStatus: async (status) => {
+    const orders = await getAllOrders();
+    return orders.filter(o => o.status === status);
+  }
 };
