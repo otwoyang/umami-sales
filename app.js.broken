@@ -131,6 +131,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Initialize database
     await DB.initDB();
 
+    // Start cloud sync scheduler (checks every 30 seconds)
+    DB.startSyncScheduler();
+
     // Initialize products
     products = await DB.initializeDefaultProducts();
 
