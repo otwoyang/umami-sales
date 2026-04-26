@@ -314,6 +314,25 @@ function generateUUID() {
 
 // ==================== PRODUCTS ====================
 
+// Default products (hardcoded fallback)
+const DEFAULT_PRODUCTS = [
+  { id: 'p1', name: 'Pieni Sushi', price: 11.50, taxPercent: 13.5, category: 'sushi', sortOrder: 1, isActive: true },
+  { id: 'p2', name: 'Pieni+ Sushi', price: 14.00, taxPercent: 13.5, category: 'sushi', sortOrder: 2, isActive: true },
+  { id: 'p3', name: 'Medium Sushi', price: 16.50, taxPercent: 13.5, category: 'sushi', sortOrder: 3, isActive: true },
+  { id: 'p4', name: 'Iso Sushi', price: 19.50, taxPercent: 13.5, category: 'sushi', sortOrder: 4, isActive: true },
+  { id: 'p5', name: 'Drink', price: 2.00, taxPercent: 13.5, category: 'drink', sortOrder: 5, isActive: true },
+  { id: 'p6', name: 'Nigri', price: 1.80, taxPercent: 13.5, category: 'drink', sortOrder: 6, isActive: true },
+  { id: 'p7', name: '*Take away', price: 0, taxPercent: 0, category: 'addon', sortOrder: 7, isActive: true },
+  { id: 'p8', name: '-Student', price: 0, taxPercent: 0, category: 'discount', sortOrder: 8, isActive: true },
+  { id: 'p9', name: '-Vege', price: 0, taxPercent: 0, category: 'discount', sortOrder: 9, isActive: true },
+  { id: 'p10', name: '-Vegan', price: 0, taxPercent: 0, category: 'discount', sortOrder: 10, isActive: true },
+  { id: 'p11', name: '-All Fry', price: 0, taxPercent: 0, category: 'discount', sortOrder: 11, isActive: true },
+  { id: 'p12', name: '-All Raw', price: 0, taxPercent: 0, category: 'discount', sortOrder: 12, isActive: true },
+  { id: 'p13', name: '-No Mayo', price: 0, taxPercent: 0, category: 'discount', sortOrder: 13, isActive: true },
+  { id: 'p14', name: '-No Dessert', price: 0, taxPercent: 0, category: 'discount', sortOrder: 14, isActive: true },
+  { id: 'p15', name: '-No Tofu(GF)', price: 0, taxPercent: 0, category: 'discount', sortOrder: 15, isActive: true }
+];
+
 async function getAllProducts() {
   // Try Supabase first
   const result = await supabaseRequest('products', { 
@@ -322,16 +341,17 @@ async function getAllProducts() {
   });
   
   if (result.data && result.data.length > 0) {
+    console.log('[Products] Loaded', result.data.length, 'products from cloud');
     // Update local cache
     await idbClear('products');
     const products = result.data.map(p => ({
       id: p.id,
       name: p.name,
       price: parseFloat(p.price),
-      taxPercent: parseFloat(p.tax_percent),
+      taxPercent: parseFloat(p.tax_percent || 13.5),
       category: p.category,
-      sortOrder: p.sort_order,
-      isActive: p.is_active,
+      sortOrder: parseInt(p.sort_order) || 0,
+      isActive: p.is_active !== false,
       createdAt: new Date(p.created_at).getTime(),
       updatedAt: new Date(p.updated_at).getTime()
     }));
@@ -341,21 +361,32 @@ async function getAllProducts() {
     return products;
   }
   
+  console.log('[Products] Cloud fetch failed or empty, trying local cache...');
   // Fallback to local cache
-  return idbGetAll('products');
+  const localProducts = await idbGetAll('products');
+  if (localProducts.length > 0) {
+    console.log('[Products] Loaded', localProducts.length, 'products from local cache');
+    return localProducts;
+  }
+  
+  // Last resort: use defaults and save to cloud
+  console.log('[Products] No local products, using defaults');
+  for (const p of DEFAULT_PRODUCTS) {
+    await idbPut('products', { ...p, createdAt: Date.now(), updatedAt: Date.now() });
+  }
+  return DEFAULT_PRODUCTS.map(p => ({ ...p, createdAt: Date.now(), updatedAt: Date.now() }));
 }
 
 async function initializeDefaultProducts() {
   const products = await getAllProducts();
   
   if (products.length > 0) {
-    console.log('[DEBUG] Loaded', products.length, 'products from cloud');
+    console.log('[DEBUG] Loaded', products.length, 'products');
     return products;
   }
   
-  console.log('[DEBUG] No products in cloud, using defaults');
-  // If cloud is empty, return empty (shouldn't happen with seeded data)
-  return [];
+  console.log('[DEBUG] No products found, using hardcoded defaults');
+  return DEFAULT_PRODUCTS.map(p => ({ ...p, createdAt: Date.now(), updatedAt: Date.now() }));
 }
 
 // ==================== ORDERS ====================
@@ -368,6 +399,7 @@ async function getAllOrders() {
   });
   
   if (result.data && result.data.length > 0) {
+    console.log('[Orders] Loaded', result.data.length, 'orders from cloud');
     // Update local cache
     await idbClear('orders');
     const orders = result.data.map(o => ({
@@ -379,7 +411,7 @@ async function getAllOrders() {
       vat: parseFloat(o.vat),
       total: parseFloat(o.total),
       paymentMethod: o.payment_method,
-      promiseTime: o.promise_time,
+      promiseTime: o.promise_time || 0,
       createdAt: new Date(o.created_at).getTime(),
       updatedAt: new Date(o.updated_at).getTime(),
       completedAt: o.completed_at ? new Date(o.completed_at).getTime() : null
@@ -390,8 +422,13 @@ async function getAllOrders() {
     return orders;
   }
   
-  // Fallback to local cache
-  return idbGetAll('orders');
+  console.log('[Orders] Cloud fetch failed or empty, using local cache');
+  // Fallback to local cache (NEVER return empty if local has data)
+  const localOrders = await idbGetAll('orders');
+  if (localOrders.length > 0) {
+    console.log('[Orders] Loaded', localOrders.length, 'orders from local cache');
+  }
+  return localOrders;
 }
 
 async function addOrder(orderData) {
